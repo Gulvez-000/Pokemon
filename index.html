@@ -96,17 +96,21 @@
   <div class="tabs">
     <div class="tab active" data-p="add">Agregar</div>
     <div class="tab" data-p="list">Archivo</div>
-    <div class="tab" data-p="docs">Documentos</div>
   </div>
 
   <div class="panel active" id="p-add">
     <label>Link (noticia o video)</label>
     <input type="url" id="fUrl" placeholder="https://...">
-    <label>Notas / contexto (opcional, ayuda al analisis de IA)</label>
+    <label>Notas / contexto (opcional)</label>
     <textarea id="fNotes" placeholder="De que trata, algo que te llamo la atencion, una cita clave..."></textarea>
-    <div class="kicker" style="margin-top:12px;font-size:11px;"><i class="ti ti-sparkles" aria-hidden="true"></i> La IA le asigna las categorias sola al guardar. Puedes corregirlas despues desde cada tarjeta.</div>
+    <label>Categorias</label>
+    <div class="catlist" id="catPicker"></div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <input type="text" id="newCat" placeholder="Agregar categoria nueva" style="max-width:220px;">
+      <button class="btn small ghost" id="addCatBtn" style="margin-top:0;">Agregar</button>
+    </div>
     <div id="addMsg"></div>
-    <button class="btn" id="submitBtn">Guardar y etiquetar</button>
+    <button class="btn" id="submitBtn">Guardar en el archivo</button>
   </div>
 
   <div class="panel" id="p-list">
@@ -125,22 +129,13 @@
       </div>
     </div>
   </div>
-
-  <div class="panel" id="p-docs">
-    <label>Categoria</label>
-    <select id="docCat"></select>
-    <div class="doc-head" style="margin-top:14px;">
-      <span class="kicker" style="font-size:11px;" id="docMeta">&nbsp;</span>
-      <button class="btn small" id="regenBtn">Regenerar documento</button>
-    </div>
-    <div class="doc-box" id="docBox">Elige una categoria y presiona "regenerar documento" luego de analizar algunas entradas.</div>
-  </div>
 </div>
 
 <script>
 let myName = null;
 let entries = [];
 let categories = [];
+let selectedCats = new Set();
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtTime(ts){ const d = new Date(ts); return d.toLocaleDateString('es',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}); }
@@ -195,6 +190,7 @@ async function loadCategories(){
   categories = r.categories;
   renderCatFilters();
   renderAllCatsList();
+  renderCatPicker();
 }
 async function addGlobalCategory(name){
   const v = (name || '').trim();
@@ -210,11 +206,21 @@ function renderAllCatsList(){
   document.getElementById('allCatsList').innerHTML = categories.map(c => `<div class="catchip" style="cursor:default;">${esc(c)}</div>`).join('');
 }
 function renderCatFilters(){
-  const fc = document.getElementById('filterCat'), dc = document.getElementById('docCat');
+  const fc = document.getElementById('filterCat');
   const prevFc = fc.value;
   fc.innerHTML = '<option value="">Todas las categorias</option>' + categories.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
-  dc.innerHTML = categories.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
   fc.value = prevFc;
+}
+function renderCatPicker(){
+  const box = document.getElementById('catPicker');
+  box.innerHTML = categories.map(c => `<div class="catchip ${selectedCats.has(c)?'sel':''}" data-c="${esc(c)}">${esc(c)}</div>`).join('');
+  box.querySelectorAll('.catchip').forEach(el=>{
+    el.onclick = ()=>{
+      const c = el.dataset.c;
+      if(selectedCats.has(c)) selectedCats.delete(c); else selectedCats.add(c);
+      renderCatPicker();
+    };
+  });
 }
 
 // --- entries ---
@@ -236,14 +242,16 @@ async function addEntry(){
   const rawUrl = document.getElementById('fUrl').value.trim();
   const notes = document.getElementById('fNotes').value.trim();
   if(!rawUrl){ msgBox.innerHTML = '<div class="err">Pega un link primero.</div>'; return; }
+  if(selectedCats.size === 0){ msgBox.innerHTML = '<div class="err">Elige al menos una categoria.</div>'; return; }
   const btn = document.getElementById('submitBtn');
-  btn.disabled = true; btn.textContent = 'Guardando y etiquetando...';
+  btn.disabled = true; btn.textContent = 'Guardando...';
   try{
-    const r = await api('entries', { method:'POST', body: JSON.stringify({ action:'create', url: rawUrl, notes }) });
+    await api('entries', { method:'POST', body: JSON.stringify({ action:'create', url: rawUrl, notes, categories: Array.from(selectedCats) }) });
     document.getElementById('fUrl').value = ''; document.getElementById('fNotes').value = '';
+    selectedCats.clear();
+    renderCatPicker();
     await loadEntries();
-    await runAnalysis(r.id);
-    msgBox.innerHTML = '<div class="ok">Guardado y etiquetado en el archivo.</div>';
+    msgBox.innerHTML = '<div class="ok">Guardado en el archivo.</div>';
   }catch(e){
     if(e.status === 409){
       msgBox.innerHTML = `<div class="err">Oye, eso ya esta puesto! Lo agrego ${esc(e.data.addedBy)}. No seas pillo.</div>`;
@@ -251,7 +259,7 @@ async function addEntry(){
       msgBox.innerHTML = '<div class="err">No se pudo guardar. Intenta de nuevo.</div>';
     }
   }
-  btn.disabled = false; btn.textContent = 'Guardar y etiquetar';
+  btn.disabled = false; btn.textContent = 'Guardar en el archivo';
 }
 
 function renderEntries(){
@@ -261,12 +269,6 @@ function renderEntries(){
   if(!list.length){ box.innerHTML = '<div class="empty">Nada por aqui todavia. Agrega el primer link.</div>'; return; }
   box.innerHTML = list.map(e => {
     const isNew = e.addedBy !== myName && (Date.now() - e.addedAt) < 1000*60*60*48;
-    const analysisHtml = e.analysis ? `
-      <div class="analysis">
-        <span class="k">Resumen</span>${esc(e.analysis.resumen)}<br>
-        <span class="k" style="margin-top:6px;">Mecanismos</span>${esc((e.analysis.mecanismos||[]).join(' / '))}<br>
-        <span class="k" style="margin-top:6px;">Framing</span>${esc(e.analysis.framing)}
-      </div>` : '';
     return `
     <div class="card ${isNew?'new':''}" data-id="${e.id}">
       <div class="card-top">
@@ -280,16 +282,13 @@ function renderEntries(){
       </div>
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
       <div class="tags" id="tags-${e.id}">
-        ${(e.categories||[]).length ? e.categories.map(c=>`<span class="tag">${esc(c)}</span>`).join('') : (e.analysis ? '' : '<span class="tag">etiquetando...</span>')}
+        ${(e.categories||[]).map(c=>`<span class="tag">${esc(c)}</span>`).join('')}
       </div>
-      ${analysisHtml}
       <div class="card-actions">
-        <button class="btn small ghost analyze-btn" data-id="${e.id}">${e.analysis ? 'Re-analizar' : 'Analizar con IA'}</button>
         <button class="btn small ghost edit-tags-btn" data-id="${e.id}">Corregir categorias</button>
       </div>
     </div>`;
   }).join('');
-  box.querySelectorAll('.analyze-btn').forEach(b => b.onclick = () => runAnalysis(parseInt(b.dataset.id), b));
   box.querySelectorAll('.edit-tags-btn').forEach(b => b.onclick = () => openTagEditor(parseInt(b.dataset.id)));
 }
 
@@ -313,54 +312,19 @@ function openTagEditor(id){
   draw();
 }
 
-async function runAnalysis(id, btn){
-  if(btn){ btn.disabled = true; btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spin"></span>analizando...'; }
-  try{
-    const r = await api('analyze', { method:'POST', body: JSON.stringify({ id }) });
-    for(const c of r.categories){ if(!categories.includes(c)){ categories.push(c); } }
-    renderCatFilters(); renderAllCatsList();
-    await loadEntries();
-  }catch(e){
-    if(btn){ btn.innerHTML = btn.dataset.orig; btn.disabled = false; }
-    alert('No se pudo analizar esta vez. Intenta de nuevo.');
-  }
-}
-
-async function regenerateDoc(){
-  const cat = document.getElementById('docCat').value;
-  const btn = document.getElementById('regenBtn'), docBox = document.getElementById('docBox');
-  btn.disabled = true; btn.textContent = 'Generando...';
-  try{
-    const r = await api('regenerate-doc', { method:'POST', body: JSON.stringify({ category: cat }) });
-    docBox.textContent = r.text;
-    document.getElementById('docMeta').textContent = `${r.sources} fuentes  |  actualizado ${fmtTime(Date.now())}`;
-  }catch(e){
-    docBox.textContent = e.message || 'No se pudo generar el documento.';
-  }
-  btn.disabled = false; btn.textContent = 'Regenerar documento';
-}
-
-async function loadDoc(){
-  const cat = document.getElementById('docCat').value;
-  if(!cat) return;
-  const docBox = document.getElementById('docBox');
-  const r = await api('doc?category=' + encodeURIComponent(cat));
-  if(r.exists){
-    docBox.textContent = r.text;
-    document.getElementById('docMeta').textContent = `${r.sources} fuentes  |  actualizado ${fmtTime(r.updatedAt)}`;
-  }else{
-    docBox.textContent = 'Todavia no hay documento para "' + cat + '".';
-    document.getElementById('docMeta').textContent = '';
-  }
-}
-
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('p-' + t.dataset.p).classList.add('active');
-  if(t.dataset.p === 'docs') loadDoc();
 });
+document.getElementById('addCatBtn').onclick = async () => {
+  const inp = document.getElementById('newCat');
+  const v = await addGlobalCategory(inp.value);
+  if(v) selectedCats.add(v);
+  renderCatPicker();
+  inp.value = '';
+};
 document.getElementById('addCatGlobalBtn').onclick = async () => {
   const inp = document.getElementById('newCatGlobal'); await addGlobalCategory(inp.value); inp.value = '';
 };
@@ -368,8 +332,6 @@ document.getElementById('submitBtn').onclick = addEntry;
 document.getElementById('filterCat').onchange = renderEntries;
 document.getElementById('filterType').onchange = renderEntries;
 document.getElementById('refreshBtn').onclick = loadEntries;
-document.getElementById('docCat').onchange = loadDoc;
-document.getElementById('regenBtn').onclick = regenerateDoc;
 
 boot();
 </script>

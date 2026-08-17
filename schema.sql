@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS people (
+  name VARCHAR(100) PRIMARY KEY,
+  dni_hash VARCHAR(128) NOT NULL,
+  role VARCHAR(20) NOT NULL DEFAULT 'member'
+);
+
+CREATE TABLE IF NOT EXISTS entries (
+  id SERIAL PRIMARY KEY,
+  url TEXT NOT NULL,
+  normalized_url VARCHAR(500) NOT NULL UNIQUE,
+  type VARCHAR(20) NOT NULL,
+  title VARCHAR(255),
+  notes TEXT,
+  categories JSONB DEFAULT '[]',
+  added_by VARCHAR(100),
+  added_at TIMESTAMPTZ DEFAULT NOW(),
+  read_by JSONB DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  name VARCHAR(100) PRIMARY KEY
+);

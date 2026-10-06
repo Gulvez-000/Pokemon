@@ -23,12 +23,17 @@ function titleFromUrl(raw) {
   try { return new URL(raw.trim()).hostname.replace(/^www\./, ''); }
   catch (e) { return raw; }
 }
+// Older rows may have read_by as a plain array of name strings; normalize to
+// {name, percent, readAt} objects so the rest of the code only deals with one shape.
+function normalizeReadBy(arr) {
+  return (arr || []).map((x) => (typeof x === 'string' ? { name: x, percent: 100, readAt: null } : x));
+}
 function rowToEntry(r) {
   return {
     id: r.id, url: r.url, normalizedUrl: r.normalized_url, type: r.type,
     title: r.title, notes: r.notes, categories: r.categories || [],
     addedBy: r.added_by, addedAt: new Date(r.added_at).getTime(),
-    readBy: r.read_by || []
+    readBy: normalizeReadBy(r.read_by)
   };
 }
 
@@ -62,9 +67,11 @@ export default async function handler(req, res) {
 
       const type = detectType(rawUrl);
       const title = titleFromUrl(rawUrl);
+      // The person adding it has obviously seen it, so they start at 100%.
+      const initialRead = [{ name, percent: 100, readAt: new Date().toISOString() }];
       const inserted = await sql`
         INSERT INTO entries (url, normalized_url, type, title, notes, categories, added_by, read_by)
-        VALUES (${rawUrl}, ${norm}, ${type}, ${title}, ${notes}, ${JSON.stringify(cats)}, ${name}, ${JSON.stringify([name])})
+        VALUES (${rawUrl}, ${norm}, ${type}, ${title}, ${notes}, ${JSON.stringify(cats)}, ${name}, ${JSON.stringify(initialRead)})
         RETURNING id`;
       return res.status(200).json({ ok: true, id: inserted.rows[0].id });
     }
@@ -78,13 +85,25 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if (action === 'markread') {
+    if (action === 'progress') {
       const id = parseInt(body.id, 10);
-      if (!id) return res.status(400).json({ error: 'Falta id' });
+      let percent = parseInt(body.percent, 10);
+      if (!id || Number.isNaN(percent)) return res.status(400).json({ error: 'Datos invalidos' });
+      percent = Math.max(0, Math.min(100, percent));
+
       const { rows } = await sql`SELECT read_by FROM entries WHERE id = ${id}`;
       if (!rows.length) return res.status(404).json({ error: 'No existe' });
-      const readBy = rows[0].read_by || [];
-      if (!readBy.includes(name)) readBy.push(name);
+      const readBy = normalizeReadBy(rows[0].read_by);
+      const existing = readBy.find((r) => r.name === name);
+      if (existing) {
+        // Never let an automatic/partial update erase further-along progress.
+        if (percent > existing.percent) {
+          existing.percent = percent;
+          existing.readAt = new Date().toISOString();
+        }
+      } else {
+        readBy.push({ name, percent, readAt: new Date().toISOString() });
+      }
       await sql`UPDATE entries SET read_by = ${JSON.stringify(readBy)} WHERE id = ${id}`;
       return res.status(200).json({ ok: true });
     }

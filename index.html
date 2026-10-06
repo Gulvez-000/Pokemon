@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title> Pensando </title>
+<title>La sala</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -70,9 +70,23 @@
   .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
   .tag{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:500;}
   .notes{font-size:13.5px;color:var(--ink-soft);margin-top:10px;line-height:1.5;}
-  .readers{font-size:11.5px;color:var(--ink-faint);margin-top:8px;}
-  .card-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
+  .readers{font-size:11.5px;color:var(--ink-faint);margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+  .reader-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg-soft);padding:2px 8px 2px 2px;border-radius:20px;}
+  .card-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .empty{font-size:13px;color:var(--ink-faint);padding:40px 0;text-align:center;}
+
+  .avatar{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;font-size:10.5px;font-weight:700;flex-shrink:0;}
+  .avatar.big{width:34px;height:34px;font-size:14px;}
+  .my-progress{display:flex;align-items:center;gap:10px;margin-top:12px;}
+  .my-progress .bar-bg{flex:1;background:var(--bg-soft);border-radius:6px;height:8px;overflow:hidden;}
+  .my-progress .bar{background:var(--blue);height:100%;border-radius:6px;transition:width .2s;}
+  .my-progress .pct{font-size:12px;font-weight:600;color:var(--blue-deep);width:36px;text-align:right;flex-shrink:0;}
+  .pctbtns{display:flex;gap:6px;}
+  .pctbtn{font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:20px;border:1px solid var(--blue-line);background:#fff;color:var(--blue-deep);cursor:pointer;}
+  .pctbtn:hover{background:var(--blue-light);}
+  .pctbtn.done{background:var(--green-bg);color:var(--green);border-color:var(--green-bg);}
+  .yt-wrap{margin-top:14px;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:16/9;}
+  .yt-wrap iframe{width:100%;height:100%;border:0;display:block;}
 
   #gate,#registerPage{max-width:380px;margin:100px auto;text-align:center;}
   #gate .eyebrow,#registerPage .eyebrow{text-align:center;}
@@ -127,7 +141,10 @@
       <div class="eyebrow">Archivo compartido</div>
       <h1>La sala</h1>
     </div>
-    <div class="who">Sesion de <b id="whoName"></b><br><span class="switchlink" id="logoutLink">salir</span></div>
+    <div class="who" style="display:flex;align-items:center;gap:8px;">
+      <span id="whoAvatar"></span>
+      <span>Sesion de <b id="whoName"></b><br><span class="switchlink" id="logoutLink">salir</span></span>
+    </div>
   </div>
 
   <div class="activity"><i class="ti ti-antenna" aria-hidden="true"></i><span id="tickerTxt">Sin actividad todavia.</span></div>
@@ -201,16 +218,43 @@ const TOPIC_COLORS = [
   '#2A4D8F','#B0403A','#2E7D5B','#C48A2E','#7C3AED','#DB2777','#0891B2',
   '#65A30D','#EA580C','#4F46E5','#059669','#BE185D','#0D9488','#9333EA','#CA8A04'
 ];
-function colorFor(cat){
+function colorFor(str){
   let h = 0;
-  for(let i=0;i<cat.length;i++){ h = (h*31 + cat.charCodeAt(i)) >>> 0; }
+  for(let i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i)) >>> 0; }
   return TOPIC_COLORS[h % TOPIC_COLORS.length];
+}
+function avatar(name, big){
+  const c = colorFor(name);
+  const initial = (name||'?').trim().charAt(0).toUpperCase();
+  return `<span class="avatar${big?' big':''}" style="background:${c}22;color:${c};">${esc(initial)}</span>`;
+}
+function extractYouTubeId(url){
+  try{
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./,'');
+    if(host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+    if(host.includes('youtube.com')){
+      if(u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(embed|shorts)\/([^/?]+)/);
+      if(m) return m[2];
+    }
+  }catch(e){}
+  return null;
+}
+function myPercent(entry){
+  const r = entry.readBy.find(x => x.name === myName);
+  return r ? r.percent : 0;
 }
 
 let myName = null, myRole = null;
 let entries = [], categories = [], people = [];
 let selectedCats = new Set();
 let listMode = 'pending';
+let expandedVideoId = null;
+let ytPlayer = null;
+let ytLastSent = 0;
+let ytPoll = null;
+let pollingPaused = false;
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtTime(ts){ const d = new Date(ts); return d.toLocaleDateString('es',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}); }
@@ -302,7 +346,7 @@ async function loadPeople(){
   people = r.people;
 }
 function renderPeopleTab(){
-  document.getElementById('peopleList').innerHTML = people.map(p => `<div class="catchip" style="cursor:default;">${esc(p.name)}${p.role==='admin' ? ' <span style="opacity:0.7;">· admin</span>' : ''}</div>`).join('');
+  document.getElementById('peopleList').innerHTML = people.map(p => `<div class="catchip" style="cursor:default;display:inline-flex;align-items:center;gap:6px;">${avatar(p.name)}${esc(p.name)}${p.role==='admin' ? ' <span style="opacity:0.7;">· admin</span>' : ''}</div>`).join('');
   const sp = document.getElementById('statsPerson');
   const prev = sp.value;
   sp.innerHTML = people.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
@@ -343,8 +387,17 @@ async function addEntry(){
   btn.disabled = false; btn.textContent = 'Guardar en el archivo';
 }
 
-async function markRead(id){
-  await api('entries', { method:'POST', body: JSON.stringify({ action:'markread', id }) });
+async function sendProgress(id, percent){
+  await api('entries', { method:'POST', body: JSON.stringify({ action:'progress', id, percent }) });
+  const entry = entries.find(e => e.id === id);
+  if(entry){
+    const r = entry.readBy.find(x => x.name === myName);
+    if(r){ if(percent > r.percent) r.percent = percent; }
+    else entry.readBy.push({ name: myName, percent, readAt: new Date().toISOString() });
+  }
+}
+async function setProgress(id, percent){
+  await sendProgress(id, percent);
   await loadEntries();
 }
 
@@ -352,33 +405,113 @@ function renderEntries(){
   const box = document.getElementById('entriesBox');
   const fc = document.getElementById('filterCat').value, ft = document.getElementById('filterType').value;
   let list = entries.filter(e => (!fc || e.categories.includes(fc)) && (!ft || e.type === ft));
-  if(listMode === 'pending'){ list = list.filter(e => !e.readBy.includes(myName)); }
+  if(listMode === 'pending'){ list = list.filter(e => myPercent(e) < 100); }
   if(!list.length){ box.innerHTML = `<div class="empty">${listMode==='pending' ? 'Estas al dia. Nada pendiente por leer.' : 'Nada por aqui todavia.'}</div>`; return; }
   box.innerHTML = list.map(e => {
     const isNew = e.addedBy !== myName && (Date.now() - e.addedAt) < 1000*60*60*48;
-    const iRead = e.readBy.includes(myName);
-    const othersRead = e.readBy.filter(n => n !== e.addedBy);
+    const pct = myPercent(e);
+    const othersRead = e.readBy.filter(r => r.name !== myName);
+    const isExpanded = expandedVideoId === e.id;
+    const ytId = e.type === 'video' ? extractYouTubeId(e.url) : null;
     return `
     <div class="card" data-id="${e.id}">
       <div class="card-top">
         <div class="card-title"><a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a></div>
-        ${isNew && !iRead ? `<span class="badge-new">Nuevo de ${esc(e.addedBy)}</span>` : (iRead ? '<span class="badge-read">Leido</span>' : '')}
+        ${isNew && pct < 100 ? `<span class="badge-new">Nuevo de ${esc(e.addedBy)}</span>` : (pct >= 100 ? '<span class="badge-read">Leido</span>' : '')}
       </div>
       <div class="meta">
         <span><i class="ti ${e.type==='video'?'ti-player-play':'ti-file-text'}" aria-hidden="true"></i> ${e.type==='video'?'video':'articulo'}</span>
-        <span>agregado por ${esc(e.addedBy)}</span>
+        <span>${avatar(e.addedBy)} agregado por ${esc(e.addedBy)}</span>
         <span>${esc(fmtTime(e.addedAt))}</span>
       </div>
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
       <div class="tags" id="tags-${e.id}">${e.categories.map(c=>`<span class="tag" style="background:${colorFor(c)}22;color:${colorFor(c)};">${esc(c)}</span>`).join('')}</div>
-      ${othersRead.length ? `<div class="readers">Leido por: ${othersRead.map(esc).join(', ')}</div>` : ''}
+
+      <div class="my-progress">
+        <div class="bar-bg"><div class="bar" style="width:${pct}%;"></div></div>
+        <div class="pct">${pct}%</div>
+      </div>
+
+      ${ytId && isExpanded ? `<div class="yt-wrap"><div id="yt-player-${e.id}"></div></div>` : ''}
+
+      ${othersRead.length ? `<div class="readers">${othersRead.map(r => `<span class="reader-chip">${avatar(r.name)} ${esc(r.name)} ${r.percent}%</span>`).join('')}</div>` : ''}
+
       <div class="card-actions">
-        ${iRead ? '' : `<button class="btn small" onclick="markRead(${e.id})">Marcar como leido</button>`}
+        ${ytId ? (isExpanded
+          ? `<button class="btn small subtle" onclick="closeVideo()">Cerrar video</button>`
+          : `<button class="btn small" onclick="openVideo(${e.id})"><i class="ti ti-player-play" aria-hidden="true"></i> Ver aqui (registra avance solo)</button>`)
+          : ''}
+        <div class="pctbtns">
+          ${[25,50,75,100].map(p => `<button class="pctbtn${pct>=p?' done':''}" onclick="setProgress(${e.id},${p})">${p}%</button>`).join('')}
+        </div>
         <button class="btn small subtle edit-tags-btn" data-id="${e.id}">Corregir temas</button>
       </div>
     </div>`;
   }).join('');
   box.querySelectorAll('.edit-tags-btn').forEach(b => b.onclick = () => openTagEditor(parseInt(b.dataset.id)));
+
+  if(expandedVideoId !== null){
+    const entry = entries.find(e => e.id === expandedVideoId);
+    const ytId = entry ? extractYouTubeId(entry.url) : null;
+    if(ytId) createYtPlayer(expandedVideoId, ytId);
+    else expandedVideoId = null;
+  }
+}
+
+// ---------- reproductor de YouTube ----------
+function loadYtApiOnce(){
+  if(window.__ytApiLoading) return;
+  window.__ytApiLoading = true;
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+}
+function openVideo(id){
+  expandedVideoId = id;
+  pollingPaused = true;
+  renderEntries();
+}
+function closeVideo(){
+  expandedVideoId = null;
+  pollingPaused = false;
+  if(ytPoll){ clearInterval(ytPoll); ytPoll = null; }
+  if(ytPlayer && ytPlayer.destroy){ try{ ytPlayer.destroy(); }catch(e){} }
+  ytPlayer = null;
+  renderEntries();
+}
+function createYtPlayer(entryId, ytId){
+  const mount = document.getElementById('yt-player-' + entryId);
+  if(!mount) return;
+  const start = () => {
+    ytLastSent = 0;
+    ytPlayer = new YT.Player('yt-player-' + entryId, {
+      videoId: ytId,
+      playerVars: { rel: 0 },
+      events: {
+        onStateChange: (ev) => {
+          if(ev.data === YT.PlayerState.ENDED){ sendProgress(entryId, 100); }
+        }
+      }
+    });
+    if(ytPoll) clearInterval(ytPoll);
+    ytPoll = setInterval(() => {
+      if(!ytPlayer || !ytPlayer.getCurrentTime) return;
+      const dur = ytPlayer.getDuration();
+      const cur = ytPlayer.getCurrentTime();
+      if(!dur) return;
+      let pct = Math.floor((cur / dur) * 100);
+      if(pct >= 92) pct = 100;
+      if(pct >= ytLastSent + 5 || pct === 100){
+        ytLastSent = pct;
+        sendProgress(entryId, pct);
+      }
+    }, 4000);
+  };
+  if(window.YT && window.YT.Player) start();
+  else{
+    loadYtApiOnce();
+    window.onYouTubeIframeAPIReady = start;
+  }
 }
 
 function openTagEditor(id){
@@ -407,7 +540,7 @@ function renderStats(){
   const sp = document.getElementById('statsPerson');
   if(!sp || !sp.value) return;
   const person = sp.value;
-  const read = entries.filter(e => e.readBy.includes(person));
+  const read = entries.filter(e => (e.readBy.find(r => r.name === person)?.percent || 0) >= 100);
   const counts = {};
   read.forEach(e => e.categories.forEach(c => { counts[c] = (counts[c]||0) + 1; }));
   const rows = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
@@ -429,7 +562,7 @@ function renderAdminTab(){
 
   document.getElementById('adminPeople').innerHTML = people.map(p => `
     <div class="adminrow">
-      <span>${esc(p.name)}${p.role==='admin' ? ' <span style="color:var(--blue);font-weight:600;">· admin</span>' : ''}</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;">${avatar(p.name)}${esc(p.name)}${p.role==='admin' ? ' <span style="color:var(--blue);font-weight:600;">· admin</span>' : ''}</span>
       <div style="display:flex;gap:8px;">
         ${p.name !== myName ? `<button class="btn small subtle toggle-role-btn" data-name="${esc(p.name)}">${p.role==='admin' ? 'Quitar admin' : 'Hacer admin'}</button>` : ''}
         ${p.name !== myName ? `<button class="btn small subtle remove-person-btn" data-name="${esc(p.name)}" style="color:var(--red);">Quitar</button>` : ''}
@@ -495,6 +628,7 @@ document.getElementById('statsPerson').onchange = renderStats;
 
 async function boot(){
   document.getElementById('whoName').textContent = myName;
+  document.getElementById('whoAvatar').innerHTML = avatar(myName, true);
   document.getElementById('gate').style.display = 'none';
   document.getElementById('registerPage').style.display = 'none';
   document.getElementById('app').style.display = 'block';
@@ -503,7 +637,7 @@ async function boot(){
   renderPeopleTab();
   renderAdminTab();
   await loadEntries();
-  setInterval(loadEntries, 15000);
+  setInterval(() => { if(!pollingPaused) loadEntries(); }, 15000);
 }
 
 (async function init(){
